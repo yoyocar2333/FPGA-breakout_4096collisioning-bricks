@@ -1,52 +1,72 @@
-# Hardware Accelerated Breakout 🧱
+# Hardware-Accelerated Breakout 🧱
 
-> 硬體加速打磚塊 — 從傳統網格到 4096 顆粒子群的極限物理運算
+> A real-time Breakout game on FPGA — scaling from a classic brick grid to a **4096-brick particle-physics engine** running entirely in hardware.
 
-一個跑在 **Terasic DE2-115 FPGA** 開發板上的打磚塊遊戲，使用 Verilog / SystemVerilog 實作。
-畫面透過 VGA 輸出、音效透過 WM8731 Audio CODEC 播放，並以 PS/2 滑鼠操作。
+A Breakout game implemented in **Verilog / SystemVerilog** on the **Terasic DE2-115 (Intel Cyclone IV E)** FPGA board. The display is driven over **VGA**, audio is played through the on-board **WM8731 codec (I²S)**, and the paddle is controlled with a **PS/2 mouse**.
 
-本專案最大的亮點是：利用 **True Dual-Port BRAM** 的 ping-pong double buffering，
-搭配 50 MHz 的 pipelined FSM，在硬體上同時運算 **4096 顆磚塊** 的碰撞物理，達成 zero-latency 的 VGA 渲染。
+The headline achievement is a **4096-brick "extreme physics" mode**: by combining **true dual-port BRAM ping-pong double buffering** with a **50 MHz pipelined FSM**, the design computes collision physics for 4096 bricks every frame while rendering the VGA output with **zero added latency** — no external frame buffer required.
 
-— 國立臺灣大學（數位電路實驗）期末專題・第十組：黃彥富、謝昊璇、林宸民
+*National Taiwan University — Digital Circuit Lab, Final Project · Team 10: Yen-Fu Huang, Hao-Hsuan Hsieh, Chen-Min Lin*
 
 ---
 
-## ✨ 特色 Features
+## 🎮 Demo
 
-- **4096 顆磚塊極限模式**：捨棄外部 frame buffer，直接以 VGA 的 `pixel_x / pixel_y` 截斷後作為 BRAM 讀取位址，組合邏輯 MUX 即時轉成 24-bit RGB。
-- **Double-Buffering（雙重緩衝）**：兩塊 True Dual-Port BRAM 互為前後端，FSM 全時運作不需停機。
-- **多時脈域設計**：VGA 渲染跑 25 MHz、物理引擎跑 50 MHz、音訊子系統跑 `AUD_BCLK`，渲染與運算硬體解耦。
-- **非同步分數佇列（Score Queue）**：把所有加分事件丟進緩衝佇列、逐幀 +1，避免多重驅動 (multiple drivers) 與 latch。
-- **硬體音效**：碰撞、消磚等事件透過 `snd_trig` 觸發，由 Lab 3 的 I2S 音訊子系統播放。
-- **雙遊戲模式**：經典模式與極限物理模式，用 `SW[11]` 切換，並在頂層做輸入遮罩避免互相干擾。
+All screenshots are captured from real hardware (DE2-115 → VGA monitor).
 
----
+**Level select — custom brick layouts (heart, smiley, space invader, and more):**
 
-## 🛠️ 硬體需求 Hardware
+![Level select screen](docs/images/level_select.png)
 
-| 項目 | 規格 |
-|------|------|
-| 開發板 | Terasic **DE2-115**（Intel/Altera Cyclone IV E） |
-| 顯示 | VGA 螢幕（640×480 @ 60 Hz） |
-| 輸入 | **PS/2 滑鼠** |
-| 音效 | 內建 WM8731 Audio CODEC + 喇叭/耳機 |
-| 工具 | **Quartus Prime**（建議 18.1 Lite 以上） |
+**Classic mode — a clean, ordered brick grid:**
 
----
+![Classic mode](docs/images/classic_mode.png)
 
-## 🎮 操作方式 Controls
+**Extreme physics mode — 4096 independent bricks, each with its own velocity vector, computed every frame:**
 
-| 操作 | 對應 |
-|------|------|
-| 移動擋板（paddle） | 滑鼠左右移動 |
-| 發球 | 滑鼠左鍵 |
-| 切換遊戲模式 | 撥動 `SW[11]` |
-| 重置遊戲 | 按下 `KEY[0]` |
+![4096-brick physics](docs/images/physics_4096.png)
+
+![4096-brick particle explosion](docs/images/physics_explosion.png)
+
+> The "spray" you see is not a particle effect — every coloured cell is a real brick whose position and collision are evaluated in hardware each frame by the pipelined physics FSM.
 
 ---
 
-## 🧩 系統架構 Architecture
+## ✨ Highlights
+
+- **4096-brick extreme mode** — Instead of an external frame buffer, the VGA `pixel_x / pixel_y` coordinates are bit-truncated (`{pixel_y[8:2], pixel_x[9:2]}`) and used directly as the BRAM read address. The 3-bit readout feeds a combinational MUX that maps to 24-bit RGB, giving a **zero-latency** display data path.
+- **Double-buffered rendering** — Two true dual-port BRAMs act as front/back buffers and swap each frame, so the physics FSM never has to stall.
+- **Multi-clock-domain design** — VGA rendering at 25 MHz, the physics engine at 50 MHz, and the audio subsystem on `AUD_BCLK`, decoupling rendering from computation in hardware.
+- **Asynchronous score queue** — Scoring events are pushed into a buffer queue and applied one-per-frame, eliminating multiple-driver conflicts and inferred latches when several events fire on the same cycle.
+- **Hardware audio** — Collision and brick-break events raise a `snd_trig` flag that drives an I²S audio subsystem (reused from Lab 3) into the WM8731 codec.
+- **Dual game modes** — A classic mode and the extreme-physics mode, toggled with `SW[11]`, with top-level input masking so the inactive module can't interfere.
+
+---
+
+## 🛠️ Hardware
+
+| Item | Specification |
+|------|---------------|
+| FPGA board | Terasic **DE2-115** (Intel/Altera Cyclone IV E, `EP4CE115F29C7`) |
+| Display | VGA monitor (640×480 @ 60 Hz) |
+| Input | **PS/2 mouse** |
+| Audio | On-board WM8731 audio codec + speaker/headphones |
+| Toolchain | **Intel Quartus Prime** (18.1 Lite or newer recommended) |
+
+---
+
+## 🎮 Controls
+
+| Action | Input |
+|--------|-------|
+| Move paddle | Move the mouse left / right |
+| Launch ball | Left mouse button |
+| Switch game mode | Toggle `SW[11]` |
+| Reset game | Press `KEY[0]` |
+
+---
+
+## 🧩 System Architecture
 
 ```
                  ┌──────────────┐
@@ -65,70 +85,83 @@
                  └──────────────┘           └──────────────────────┘
 ```
 
-**物理引擎工作流程**：
-`P_IDLE`（等 VGA frame tick，每 2 幀更新一次）→
-`P_CLEAR_BG`（清空後端緩衝畫布）→
-`P_UPD_0` Fetch → `P_UPD_1` Address → `P_UPD_2` Collide & Write-back（處理 0–4095 號磚塊）→
-`P_SWAP`（前後端緩衝交換）。
+**Physics engine pipeline (FSM):**
+`P_IDLE` (wait for VGA frame tick; physics updates every 2 frames) →
+`P_CLEAR_BG` (clear the back-buffer canvas) →
+`P_UPD_0` Fetch → `P_UPD_1` Address → `P_UPD_2` Collide & Write-back (iterating bricks 0–4095) →
+`P_SWAP` (swap front/back buffers).
 
-詳細資料路徑與演算法請見 [`docs/team10_final_report.pdf`](docs/team10_final_report.pdf)。
+In `P_UPD_2`, a non-zero readout from the front-buffer BRAM signals a spatial-hash collision with another brick; combined with the ball-collision latch, the brick is either cleared (written as `3'd0`) or has its velocity vector reflected and its new position written back.
+
+For the full data path and timing analysis, see [`docs/team10_final_report.pdf`](docs/team10_final_report.pdf).
 
 ---
 
-## 📂 檔案結構 File Structure
+## ⚙️ Engineering Challenges Solved
+
+This section captures the real hardware-design problems encountered and how they were resolved — the parts I learned the most from.
+
+- **Routing explosion from a 4096-iteration `for` loop.** An early version scanned all 4096 bricks inside VGA combinational logic, so the synthesizer tried to unroll tens of thousands of multiplexers and Analysis & Synthesis stalled for 30+ minutes. **Fix:** rewrite the loop as a true dual-port BRAM with ping-pong buffering, driven by a 50 MHz pipelined FSM.
+- **Multiple drivers and inferred latches.** When "ball breaks brick" and "collect bonus" fired on the same cycle, two logic blocks assigned to the score register simultaneously. **Fix:** an asynchronous score queue that serializes scoring events one-per-frame, plus strictly moving all combinational `wire` assignments outside `always` blocks for clean D-FF synthesis.
+- **Ghost inputs across game modules.** After integrating two game modules, the mouse `click` signal reached both, so the background module silently ran and triggered a false Game Over. **Fix:** hardware input masking at the top level (e.g. `click & ~switch`) to fully isolate the inactive module.
+
+---
+
+## 📂 File Structure
 
 ```
 .
 ├── README.md
 ├── LICENSE
 ├── .gitignore
-├── docs/                      # 書面報告與簡報
+├── docs/                      # Written report, presentation & images
 │   ├── team10_final_report.pdf
-│   └── Presentation.pdf
+│   ├── Presentation.pdf
+│   └── images/                # Demo screenshots
 └── src/
-    ├── breakout_top.v         # 遊戲主模組（物理引擎 + TDP BRAM）
-    ├── interface.sv           # 頂層整合：模式切換與輸入遮罩
-    ├── vga_controller.v       # VGA 時序控制
-    ├── DE2_115/               # 開發板頂層與腳位約束
-    │   ├── DE2_115.sv         # 板級頂層（PS/2 滑鼠、VGA、音訊接腳）
-    │   ├── DE2_115.qsf        # Quartus 腳位/設定
-    │   ├── DE2_115.sdc        # 時序約束
+    ├── breakout_top.v         # Main game module (physics engine + TDP BRAM)
+    ├── interface.sv           # Top-level integration: mode switching & input masking
+    ├── vga_controller.v       # VGA timing controller
+    ├── DE2_115/               # Board-level top & pin constraints
+    │   ├── DE2_115.sv         # Board top (PS/2 mouse, VGA, audio pins)
+    │   ├── DE2_115.qsf        # Quartus pin / settings
+    │   ├── DE2_115.sdc        # Timing constraints
     │   ├── Debounce.sv
     │   └── SevenHexDecoder.sv
-    └── sound/                 # 音效子系統（改自 Lab 3）
-        ├── *_rom/             # 各音效的 ROM IP
-        ├── src/               # AudDSP / AudPlayer / I2C 初始化 / IP cores
+    └── sound/                 # Audio subsystem (adapted from Lab 3)
+        ├── *_rom/             # Per-sound ROM IP
+        ├── src/               # AudDSP / AudPlayer / I2C init / IP cores
         ├── *.mif / *.wav / *.raw
-        └── mif_gen*.py        # 由音檔產生 .mif 的工具腳本
+        └── mif_gen*.py        # Scripts that generate .mif from audio files
 ```
 
 ---
 
-## 🚀 如何編譯與燒錄 Build & Flash
+## 🚀 Build & Flash
 
-> 因為 IP Core 與部分絕對路徑與 Quartus 環境綁定，建議用 Quartus 重新建立專案後再加入原始檔。
+> Because the IP cores and some paths are tied to the Quartus environment, the most reliable approach is to recreate the project in Quartus and add the source files.
 
-1. 開啟 **Quartus Prime**，新建專案，元件選 **Cyclone IV E `EP4CE115F29C7`**（DE2-115）。
-2. 將 `src/` 內的 `.v` / `.sv` 加入專案，頂層設為 **`DE2_115`**。
-3. 匯入腳位約束：在 `Assignments → Import Assignments` 選擇 `src/DE2_115/DE2_115.qsf`；時序約束加入 `DE2_115.sdc`。
-4. 重新產生 `src/sound/` 內所需的 IP（`*_rom`、`audio_rom`、`lab3_qsys` 等），或直接沿用附帶的 `.qip` / `.mif`。
-5. `Processing → Start Compilation` 編譯。
-6. `Tools → Programmer`，連接 DE2-115，燒錄 `output_files/*.sof`。
-7. 接上 VGA 螢幕與 PS/2 滑鼠，開機即可遊玩。
+1. Open **Quartus Prime**, create a new project, and select the device **Cyclone IV E `EP4CE115F29C7`** (DE2-115).
+2. Add the `.v` / `.sv` files under `src/` to the project and set **`DE2_115`** as the top-level entity.
+3. Import constraints: `Assignments → Import Assignments`, choose `src/DE2_115/DE2_115.qsf`; add `DE2_115.sdc` for timing.
+4. Regenerate the IP under `src/sound/` (`*_rom`, `audio_rom`, `lab3_qsys`, etc.), or reuse the included `.qip` / `.mif` files.
+5. `Processing → Start Compilation`.
+6. `Tools → Programmer`, connect the DE2-115, and flash `output_files/*.sof`.
+7. Connect a VGA monitor and a PS/2 mouse, then power on to play.
 
-### 重新產生音效 .mif
+### Regenerating audio `.mif`
 
 ```bash
 cd src/sound
-python3 mif_gen.py        # 依腳本內設定，把 .wav/.raw 轉成 .mif
+python3 mif_gen.py        # Converts .wav/.raw into .mif per the script's settings
 ```
 
 ---
 
-## 👥 團隊 Team
+## 👥 Team
 
-第十組 — 黃彥富、謝昊璇、林宸民
+Team 10 — Yen-Fu Huang, Hao-Hsuan Hsieh, Chen-Min Lin
 
-## 📄 授權 License
+## 📄 License
 
-本專案採用 [MIT License](LICENSE)，歡迎參考與學習。
+Released under the [MIT License](LICENSE). Feel free to reference and learn from it.
