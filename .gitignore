@@ -1,0 +1,46 @@
+# ─── Quartus / Intel FPGA 編譯產物 ───────────────────────────
+db/
+incremental_db/
+output_files/
+simulation/
+greybox_tmp/
+hc_output/
+timing/
+*.qws
+*.rpt
+*.summary
+*.smsg
+*.jdi
+*.pin
+*.done
+*.qarlog
+*.sld
+*.bak~
+
+# 編譯後的燒錄檔（如需保留可移除下面三行）
+*.sof
+*.pof
+*.jam
+*.jbc
+*.svf
+
+# ModelSim / 模擬暫存
+transcript
+vsim.wlf
+*.wlf
+work/
+
+# ─── 編輯器 / 系統暫存 ──────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# ─── 程式碼備份檔（不需要進版控） ──────────────────────────
+*_old.*
+*_backup.*
+*_unsaved.*
+*.bak
+*.qsf.bak
