@@ -1,10 +1,10 @@
 # Hardware-Accelerated Breakout 🧱
 
-> A real-time Breakout game on FPGA — scaling from a classic brick grid to a **4096-brick particle-physics engine** running entirely in hardware.
+> A real-time Breakout game on FPGA — scaling from a classic brick grid to a **4096-object hardware physics mode** implemented with BRAM-backed spatial occupancy and a 50 MHz update FSM.
 
 A Breakout game implemented in **Verilog / SystemVerilog** on the **Terasic DE2-115 (Intel Cyclone IV E)** FPGA board. The display is driven over **VGA**, audio is played through the on-board **WM8731 codec (I²S)**, and the paddle is controlled with a **PS/2 mouse**.
 
-The headline achievement is a **4096-brick "extreme physics" mode**: by combining **true dual-port BRAM ping-pong double buffering** with a **50 MHz pipelined FSM**, the design computes collision physics for 4096 bricks every frame while rendering the VGA output with **zero added latency** — no external frame buffer required.
+The headline achievement is a **4096-brick "extreme physics" mode**. Each object stores its own color, velocity direction, and grid position in a 20-bit state word. A **50 MHz three-stage update FSM** walks all 4096 objects, probes a RAM-backed occupancy grid for collisions, writes the next state into the back buffer, and swaps buffers after the pass. VGA reads the active buffer directly, so rendering and physics are decoupled without an external frame buffer.
 
 *National Taiwan University — Digital Circuit Lab, Final Project · Team 10: Yen-Fu Huang, Hao-Hsuan Hsieh, Chen-Min Lin*
 
@@ -22,22 +22,22 @@ All screenshots are captured from real hardware (DE2-115 → VGA monitor).
 
 ![Classic mode](docs/images/classic_mode.png)
 
-**Extreme physics mode — 4096 independent bricks, each with its own velocity vector, computed every frame:**
+**Extreme physics mode — 4096 independently stored brick states, updated by the hardware FSM:**
 
 ![4096-brick physics](docs/images/physics_4096.png)
 
 ![4096-brick particle explosion](docs/images/physics_explosion.png)
 
-> The "spray" you see is not a particle effect — every coloured cell is a real brick whose position and collision are evaluated in hardware each frame by the pipelined physics FSM.
+> The "spray" is not a pre-rendered particle effect: each coloured cell corresponds to one brick state held in FPGA memory and updated by the hardware FSM.
 
 ---
 
 ## ✨ Highlights
 
-- **4096-brick extreme mode** — Instead of an external frame buffer, the VGA `pixel_x / pixel_y` coordinates are bit-truncated (`{pixel_y[8:2], pixel_x[9:2]}`) and used directly as the BRAM read address. The 3-bit readout feeds a combinational MUX that maps to 24-bit RGB, giving a **zero-latency** display data path.
-- **Double-buffered rendering** — Two true dual-port BRAMs act as front/back buffers and swap each frame, so the physics FSM never has to stall.
+- **4096-brick extreme mode** — VGA `pixel_x / pixel_y` are bit-truncated (`{pixel_y[8:2], pixel_x[9:2]}`) and used as the occupancy-buffer address. The 3-bit color code is mapped to 24-bit RGB, avoiding a separate external frame-buffer controller.
+- **Ping-pong occupancy buffers** — Two synthesizable dual-port RAM blocks act as front/back grids. VGA reads the active grid while the physics FSM writes the next grid, then `active_grid` swaps after the update pass.
 - **Multi-clock-domain design** — VGA rendering at 25 MHz, the physics engine at 50 MHz, and the audio subsystem on `AUD_BCLK`, decoupling rendering from computation in hardware.
-- **Asynchronous score queue** — Scoring events are pushed into a buffer queue and applied one-per-frame, eliminating multiple-driver conflicts and inferred latches when several events fire on the same cycle.
+- **Mode isolation at the top level** — `click` is masked with the mode switch before entering each game core, preventing the inactive module from reacting to user input.
 - **Hardware audio** — Collision and brick-break events raise a `snd_trig` flag that drives an I²S audio subsystem (reused from Lab 3) into the WM8731 codec.
 - **Dual game modes** — A classic mode and the extreme-physics mode, toggled with `SW[11]`, with top-level input masking so the inactive module can't interfere.
 
@@ -86,14 +86,42 @@ All screenshots are captured from real hardware (DE2-115 → VGA monitor).
 ```
 
 **Physics engine pipeline (FSM):**
-`P_IDLE` (wait for VGA frame tick; physics updates every 2 frames) →
-`P_CLEAR_BG` (clear the back-buffer canvas) →
-`P_UPD_0` Fetch → `P_UPD_1` Address → `P_UPD_2` Collide & Write-back (iterating bricks 0–4095) →
+`P_IDLE` (wait for VGA frame tick; update starts every second tick) →
+`P_CLEAR_BG` (clear 32,768 occupancy cells) →
+`P_UPD_0` Fetch → `P_UPD_1` Address → `P_UPD_2` Collide & Write-back for brick 0…4095 →
 `P_SWAP` (swap front/back buffers).
+
+At 50 MHz, the steady-state pass is analytically bounded by about **45,057 cycles ≈ 0.90 ms**: 32,768 cycles to clear the back grid, 3×4096 cycles to process all bricks, plus the swap. This is comfortably below the ~33 ms interval between physics updates when running every two 60 Hz frames.
 
 In `P_UPD_2`, a non-zero readout from the front-buffer BRAM signals a spatial-hash collision with another brick; combined with the ball-collision latch, the brick is either cleared (written as `3'd0`) or has its velocity vector reflected and its new position written back.
 
-For the full data path and timing analysis, see [`docs/team10_final_report.pdf`](docs/team10_final_report.pdf).
+The timing figure above is derived directly from the checked-in FSM and counter bounds in `src/breakout_top.v`; no post-route timing report is included in this repository.
+
+---
+
+## 📐 Verifiable design facts
+
+These numbers come directly from the checked-in RTL rather than from an external synthesis report:
+
+| Item | RTL-backed value |
+|---|---:|
+| Brick states | 4096 |
+| State bits per brick | 20 bits (`color[2:0]`, `dy`, `dx`, `y[6:0]`, `x[7:0]`) |
+| Occupancy-grid address width | 15 bits |
+| Occupancy cells per buffer | 32,768 |
+| Occupancy-buffer payload | 3 bits/cell |
+| Physics clock | 50 MHz |
+| VGA pixel clock | 25 MHz |
+| Update pipeline | 3 FSM stages per brick |
+| Brick-update cycles | 12,288 cycles |
+| Back-grid clear cycles | 32,768 cycles |
+| Approx. full physics pass | 45,057 cycles ≈ 0.90 ms |
+| Physics cadence | every 2 VGA frame ticks |
+
+Two important clarifications for reviewers:
+
+1. **4096 bricks are independently stored, but not updated in 4096-way parallel.** The architecture uses one pipelined FSM that iterates over the 4096 states.
+2. The RAM modules are written in synthesizable dual-port style. Exact M9K/LUT utilization and Fmax require a Quartus compilation report; those reports are not currently committed here.
 
 ---
 
@@ -101,8 +129,7 @@ For the full data path and timing analysis, see [`docs/team10_final_report.pdf`]
 
 This section captures the real hardware-design problems encountered and how they were resolved — the parts I learned the most from.
 
-- **Routing explosion from a 4096-iteration `for` loop.** An early version scanned all 4096 bricks inside VGA combinational logic, so the synthesizer tried to unroll tens of thousands of multiplexers and Analysis & Synthesis stalled for 30+ minutes. **Fix:** rewrite the loop as a true dual-port BRAM with ping-pong buffering, driven by a 50 MHz pipelined FSM.
-- **Multiple drivers and inferred latches.** When "ball breaks brick" and "collect bonus" fired on the same cycle, two logic blocks assigned to the score register simultaneously. **Fix:** an asynchronous score queue that serializes scoring events one-per-frame, plus strictly moving all combinational `wire` assignments outside `always` blocks for clean D-FF synthesis.
+- **Avoiding a 4096-way combinational datapath.** The implemented design serializes object updates through a three-state 50 MHz FSM and uses RAM-backed spatial occupancy instead of evaluating all object collisions in one giant combinational expression. This trades a small, deterministic update time for far lower routing pressure.
 - **Ghost inputs across game modules.** After integrating two game modules, the mouse `click` signal reached both, so the background module silently ran and triggered a false Game Over. **Fix:** hardware input masking at the top level (e.g. `click & ~switch`) to fully isolate the inactive module.
 
 ---
@@ -114,10 +141,8 @@ This section captures the real hardware-design problems encountered and how they
 ├── README.md
 ├── LICENSE
 ├── .gitignore
-├── docs/                      # Written report, presentation & images
-│   ├── team10_final_report.pdf
-│   ├── Presentation.pdf
-│   └── images/                # Demo screenshots
+├── docs/
+│   └── images/                # Real-hardware demo screenshots
 └── src/
     ├── breakout_top.v         # Main game module (physics engine + TDP BRAM)
     ├── interface.sv           # Top-level integration: mode switching & input masking
